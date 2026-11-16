@@ -127,6 +127,26 @@ MEMORY = ["auto", "low VRAM"]
 # what the model sees -> OCIO role (exists in ACES configs and in nuke-default)
 MODEL_COLOURS = ["viewer look (recommended)", "sRGB texture (no tone map)"]
 MODEL_ROLES = ["color_picking", "matte_paint"]
+# OCIO v1 (Nuke 12/13) and v2 (Nuke 17) configs don't always define the same role names.
+WORKING_SPACE_CANDIDATES = ["scene_linear", "linear", "Linear"]
+
+
+def _set_colourspace(node, knob_name, candidates):
+    """Set an OCIOColorSpace knob to the first candidate the current OCIO config knows.
+    Warns (instead of failing silently) when none of them exists, so a wrong config is visible."""
+    knob = node[knob_name]
+    try:
+        known = list(knob.values())
+    except Exception:
+        known = []
+    for name in candidates:
+        if not known or name in known:
+            knob.setValue(name)
+            return name
+    knob.setValue(candidates[0])
+    nuke.tprint(f"[CorridorKey] {node.name()}.{knob_name}: none of {candidates} is in this OCIO config; "
+                f"check the colour config (ACES / nuke-default)")
+    return candidates[0]
 
 KEY_FILE = "[value parent.cache_dir]/out/plate_cutout_exr/cutout_######.exr"
 
@@ -409,8 +429,8 @@ def create(connect_selected=True):
 
         # --- plate cache: working space -> display-referred (what the model expects), written raw
         to_model = nuke.nodes.OCIOColorSpace(name="To_model", inputs=[plate], xpos=200, ypos=-340)
-        to_model["in_colorspace"].setValue("scene_linear")
-        to_model["out_colorspace"].setValue(MODEL_ROLES[0])
+        _set_colourspace(to_model, "in_colorspace", WORKING_SPACE_CANDIDATES)
+        _set_colourspace(to_model, "out_colorspace", [MODEL_ROLES[0]])
         crop_p = nuke.nodes.Crop(name="Crop_plate", inputs=[to_model], xpos=200, ypos=-300, reformat=False, crop=True)
         crop_p["box"].setExpression("0", 0)
         crop_p["box"].setExpression("0", 1)
@@ -475,8 +495,8 @@ def create(connect_selected=True):
         enc = nuke.nodes.Expression(name="Encode_sRGB", inputs=[rd_ch], xpos=-200, ypos=-270)
         _set_srgb_encode(enc)
         from_model = nuke.nodes.OCIOColorSpace(name="From_model", inputs=[enc], xpos=-200, ypos=-240)
-        from_model["in_colorspace"].setValue(MODEL_ROLES[0])
-        from_model["out_colorspace"].setValue("scene_linear")
+        _set_colourspace(from_model, "in_colorspace", [MODEL_ROLES[0]])
+        _set_colourspace(from_model, "out_colorspace", WORKING_SPACE_CANDIDATES)
         clip = nuke.nodes.Grade(name="Clip_matte", inputs=[from_model], xpos=-200, ypos=-210)
         clip["channels"].setValue("alpha")
         clip["blackpoint"].setExpression("parent.clip_black")
@@ -588,7 +608,7 @@ def _point_read(node, first, count, keep_start=False):
         node["key_start"].setValue(int(first))
     fm = _inner(node, "From_model")
     if fm is not None:
-        fm["in_colorspace"].setValue(MODEL_ROLES[int(node["ck_colour"].value())])
+        _set_colourspace(fm, "in_colorspace", [MODEL_ROLES[int(node["ck_colour"].value())]])
     _apply_start(node)
     rd = _inner(node, "Read_key")
     if rd is not None:
@@ -746,8 +766,8 @@ def make_read_switch(node, quiet=False):
         _set_srgb_encode(enc)
         enc.setInput(0, rd)
         fm = _get_or_make("OCIOColorSpace", f"{base}_toWorking")
-        fm["in_colorspace"].setValue(MODEL_ROLES[int(node["ck_colour"].value())])
-        fm["out_colorspace"].setValue("scene_linear")
+        _set_colourspace(fm, "in_colorspace", [MODEL_ROLES[int(node["ck_colour"].value())]])
+        _set_colourspace(fm, "out_colorspace", WORKING_SPACE_CANDIDATES)
         fm.setInput(0, enc)
         cl = _get_or_make("Grade", f"{base}_clipMatte")
         cl["channels"].setValue("alpha")
@@ -929,7 +949,7 @@ def prepare(node):
         _clean_dir(os.path.join(cache, sub))
     colour = int(node["model_colour"].getValue())
     node["ck_colour"].setValue(colour)
-    to_model["out_colorspace"].setValue(MODEL_ROLES[colour])
+    _set_colourspace(to_model, "out_colorspace", [MODEL_ROLES[colour]])
 
     # 1) render plate (and hint) to EXR inside Nuke - always at full resolution
     _status(node, "rendering plate to cache...")
@@ -989,6 +1009,10 @@ def subprocess_env():
     env = dict(os.environ)
     for var in ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "PYTHONUSERBASE"):
         env.pop(var, None)
+    # Nuke sets LD_LIBRARY_PATH to its own bundled libraries (libstdc++, openssl, ...).
+    # If the backend's conda Python and torch see them first they can crash, so drop them.
+    if sys.platform != "win32":
+        env.pop("LD_LIBRARY_PATH", None)
     env["PYTHONUNBUFFERED"] = "1"
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONNOUSERSITE"] = "1"

@@ -130,6 +130,33 @@ def python_version(py: Path, env: dict) -> str:
 
 # --- steps ---------------------------------------------------------------------------------------
 
+MIN_DRIVER_MAJOR = 570   # the cu128 PyTorch wheels need a driver that supports CUDA 12.8 (approximate)
+
+
+def check_gpu():
+    """Warn (never block) about the GPU model and driver version that CorridorKey needs."""
+    try:
+        out = subprocess.run(["nvidia-smi", "--query-gpu=name,driver_version", "--format=csv,noheader"],
+                             capture_output=True, text=True, timeout=20).stdout.strip().splitlines()
+    except Exception as exc:
+        print(f"  WARNING: could not query the GPU with nvidia-smi: {exc}")
+        return
+    if not out:
+        print("  WARNING: nvidia-smi reported no GPU.")
+        return
+    name, _, driver = out[0].partition(",")
+    name, driver = name.strip(), driver.strip()
+    print(f"  GPU: {name} | driver {driver}")
+    if "RTX" not in name.upper():
+        print("  WARNING: CorridorKey is tested on NVIDIA RTX 30-series or newer; this GPU may be too old.")
+    try:
+        if int(driver.split(".")[0]) < MIN_DRIVER_MAJOR:
+            print(f"  WARNING: driver {driver} is older than {MIN_DRIVER_MAJOR}; update the NVIDIA driver "
+                  "before running CorridorKey.")
+    except ValueError:
+        pass
+
+
 def checks(backend: Path):
     step("Checking the machine")
     if not (WIN or sys.platform.startswith("linux")):
@@ -137,6 +164,8 @@ def checks(backend: Path):
     if not shutil.which("nvidia-smi"):
         print("  WARNING: nvidia-smi not found. CorridorKey needs an NVIDIA RTX GPU (30-series or newer) "
               "with a current driver.")
+    else:
+        check_gpu()
     probe = backend if backend.exists() else backend.anchor or backend.parent
     try:
         free_gb = shutil.disk_usage(probe).free / 1e9

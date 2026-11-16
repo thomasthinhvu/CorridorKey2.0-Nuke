@@ -118,6 +118,13 @@ The hint decides *what* is keyed. It doesn't add edge detail.
 - **ffmpeg not found:** re-run the installer (it installs ffmpeg into CorridorKey's own environment).
 - **Key looks out of step with the plate:** press **reset** next to *key starts at*, or **Reload result**.
 
+## My Modification update
+
+- **[26-11-16]**
+  - **Linux:** the node no longer passes Nuke's `LD_LIBRARY_PATH` to the CorridorKey Python, so its bundled libraries can't clash with the backend's.
+  - **Installer:** checks the GPU model and driver version (warnings only) and says which driver is too old for the CUDA 12.8 PyTorch build.
+  - **Colour config:** OCIO colourspace names are chosen from what the current config knows, with a console warning when none match (Nuke 12/13 OCIO v1 vs Nuke 17 OCIO v2). Not yet tested in Nuke 12 or 13.
+
 ## Credits and licence
 
 - **CorridorKey 2.0**: model designed and trained by **Zachary Harris** with **Niko Pueringer / Corridor Digital**. https://github.com/nikopueringer/CorridorKey2.0
